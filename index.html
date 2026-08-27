@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="nb">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Matlyst status</title>
+<style>
+  :root { --krem:#F7F3EC; --blekk:#1E1813; --myk:#6E6155; --terrakotta:#C4552A; --gronn:#5F7A5A; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--krem); color:var(--blekk); font-family:system-ui,-apple-system,sans-serif;
+         min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }
+  .kort { max-width:520px; text-align:center; }
+  .prikk { width:14px; height:14px; border-radius:50%; display:inline-block; margin-right:10px; vertical-align:middle; }
+  h1 { font-size:28px; font-weight:400; margin-bottom:14px; }
+  p { color:var(--myk); font-size:17px; line-height:1.5; }
+  .tid { margin-top:22px; font-size:14px; color:var(--myk); }
+</style>
+</head>
+<body>
+  <div class="kort">
+    <h1><span class="prikk" id="prikk"></span><span id="tittel">Henter status</span></h1>
+    <p id="melding"></p>
+    <p class="tid" id="tid"></p>
+  </div>
+<script>
+var TEKST = {
+  oppe: ['Alt virker', '#5F7A5A'],
+  treg: ['Det går tregt akkurat nå', '#C4552A'],
+  nede: ['Vi har problemer', '#C4552A'],
+  vedlikehold: ['Vedlikehold pågår', '#C4552A'],
+}
+fetch('status.json?t=' + Date.now())
+  .then(function (r) { return r.json() })
+  .then(function (s) {
+    var t = TEKST[s.tilstand] || TEKST.nede
+    document.getElementById('tittel').textContent = t[0]
+    document.getElementById('prikk').style.background = t[1]
+    document.getElementById('melding').textContent = s.melding || ''
+    document.getElementById('tid').textContent = 'Sist oppdatert ' + new Date(s.oppdatert).toLocaleString('nb-NO')
+  })
+  .catch(function () {
+    document.getElementById('tittel').textContent = 'Fant ikke statusen'
+    document.getElementById('prikk').style.background = '#6E6155'
+  })
+</script>
+</body>
+</html>
