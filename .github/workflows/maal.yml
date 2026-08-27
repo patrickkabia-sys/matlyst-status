@@ -1,0 +1,55 @@
+name: Mål Supabase
+
+# ⚠️ Trigges KUN på schedule og manuell kjøring. Aldri på pull_request.
+#
+# Repoet er offentlig, og det er nettopp fork-baserte pull requests som er
+# angrepsveien mot hemmeligheter i offentlige repoer: en fork endrer workflowen
+# til å skrive dem ut. GitHub sender aldri secrets til fork-PR-er, og her finnes
+# triggeren ikke i det hele tatt. workflow_dispatch krever skrivetilgang.
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Én kjøring om gangen. To samtidige ville kunne skrive over hverandres
+# status.json og gi en push-konflikt.
+concurrency:
+  group: maal
+  cancel-in-progress: false
+
+jobs:
+  maal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Testene kjører FØR målingen. En ødelagt fletting skal aldri få lov til
+      # å skrive status.json, for da lyver statusen i stedet for å mangle.
+      - name: Kjør testene
+        run: node test-maal.mjs
+
+      - name: Mål og skriv status
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: node maal.mjs
+
+      - name: Commit hvis noe endret seg
+        run: |
+          if git diff --quiet status.json; then
+            echo "uendret, ingenting å committe"
+            exit 0
+          fi
+          TILSTAND=$(node -e "console.log(JSON.parse(require('fs').readFileSync('status.json','utf8')).tilstand)")
+          git config user.name "matlyst-status"
+          git config user.email "hei@matlyst-app.no"
+          git add status.json
+          git commit -m "status: $TILSTAND"
+          git push
