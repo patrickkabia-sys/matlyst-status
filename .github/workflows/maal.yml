@@ -35,6 +35,12 @@ jobs:
       - name: Kjør testene
         run: node test-maal.mjs
 
+      # Tilstanden FØR målingen, lest fra fila på disk. Trengs for å vite om
+      # dette er et skifte eller bare enda en måling som sier det samme.
+      - name: Hva sto det før
+        run: |
+          echo "FORRIGE=$(node -e "console.log(JSON.parse(require('fs').readFileSync('status.json','utf8')).tilstand)")" >> "$GITHUB_ENV"
+
       - name: Mål og skriv status
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -53,3 +59,34 @@ jobs:
           git add status.json
           git commit -m "status: $TILSTAND"
           git push
+          echo "NY=$TILSTAND" >> "$GITHUB_ENV"
+
+      # ⚠️ Et varsel KUN ved skifte, aldri ved hver måling. Grunnen er den samme
+      # som at `nede` krever at alle tre probene feiler: et varsel som kommer
+      # hvert femte minutt blir slått av, og da varsler det ingenting.
+      #
+      # Dette finnes fordi sida meldte falsk nedetid i 30 timer 28.08.2026 uten
+      # at noen fikk beskjed. Den ble oppdaget ved at et menneske tilfeldigvis
+      # så etter. Kostnaden var ikke feilen, den var de 30 timene.
+      #
+      # Emnet er den eneste tilgangskontrollen ntfy har, derfor secret og ikke
+      # variable, og derfor har denne workflowen ingen pull_request-trigger.
+      - name: Varsle ved skifte
+        if: env.NY != '' && env.NY != env.FORRIGE
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          if [ -z "$NTFY_TOPIC" ]; then echo "NTFY_TOPIC mangler, hopper over"; exit 0; fi
+          case "$NY" in
+            nede) TITTEL="Matlyst: serveren svarer ikke"; PRI=5 ;;
+            treg) TITTEL="Matlyst: serveren er treg";     PRI=4 ;;
+            oppe) TITTEL="Matlyst: serveren er tilbake";  PRI=3 ;;
+            *)    TITTEL="Matlyst: status $NY";           PRI=3 ;;
+          esac
+          # Kroppen er UTF-8 og tar norske tegn. Tittelen er en HTTP-header og
+          # holdes derfor til ren ASCII, ellers viser telefonen «Ã¦Ã¸Ã¥».
+          curl -sS --max-time 20 \
+            -H "Title: $TITTEL" -H "Priority: $PRI" \
+            -d "Status gikk fra $FORRIGE til $NY. https://status.matlyst-app.no" \
+            "https://ntfy.sh/$NTFY_TOPIC" > /dev/null
+          echo "varslet: $FORRIGE -> $NY"
