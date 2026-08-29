@@ -33,16 +33,40 @@ export const MALMELDING = {
   oppe: '',
 }
 
-/** Én probe. Returnerer svartid i ms, eller null hvis den feilet. */
-export async function probe(hent = fetch) {
+/**
+ * Én probe. Returnerer svartid i ms, eller null hvis den feilet.
+ *
+ * ⚠️ En feilet probe MÅ logge hvorfor. Første versjon gjorde
+ * `return r.ok ? ... : null` og slukte statuskoden, og 28.08.2026 sto sida og
+ * meldte nede i 26 timer mens serveren svarte 200 fra hver annen maskin. Da
+ * loggen bare sa `[null,null,null]` var det ikke mulig å skille en rotert
+ * nøkkel (401) fra en blokkert runner-IP (403) fra feil URL (404) uten å endre
+ * koden først. Samme klasse stille feil som `runTranslate()` i hovedrepoet:
+ * at et kall feilet er halve svaret, hvorfor er den halvdelen som betyr noe.
+ *
+ * Kroppen tas med, avkortet. PostgREST forklarer seg der («Invalid API key»),
+ * og Cloudflare ser helt annerledes ut. Anon-nøkkelen ligger uansett i
+ * app-bundlen, og GitHub masker secrets i logg, så det er ingenting å lekke.
+ */
+export async function probe(hent = fetch, logg = console.error) {
   const start = Date.now()
   try {
     const r = await hent(`${SB}/rest/v1/profiles?select=id&limit=1`, {
       headers: { apikey: ANON, Authorization: `Bearer ${ANON}` },
       signal: AbortSignal.timeout(TIMEOUT_MS),
     })
-    return r.ok ? Date.now() - start : null
-  } catch {
+    const ms = Date.now() - start
+    if (r.ok) return ms
+    let kropp = ''
+    try {
+      kropp = (await r.text()).slice(0, 200).replace(/\s+/g, ' ').trim()
+    } catch {
+      kropp = '(kunne ikke leses)'
+    }
+    logg(`probe feilet etter ${ms} ms: HTTP ${r.status} ${kropp}`.trim())
+    return null
+  } catch (e) {
+    logg(`probe feilet etter ${Date.now() - start} ms: ${e?.name ?? 'Error'}: ${e?.message ?? e}`)
     return null
   }
 }

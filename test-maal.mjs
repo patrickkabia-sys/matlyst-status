@@ -4,8 +4,54 @@
 // det som gjør at det virker når alt annet er nede, og at en lokal modell kan
 // kjøre det uten å installere noe.
 import assert from 'node:assert/strict'
-import { maalTilstand, flettStatus, MALMELDING } from './maal.mjs'
+import { probe, maalTilstand, flettStatus, MALMELDING } from './maal.mjs'
 import { validerMelding, MAKS_MELDING_TEGN, tilUtc } from './status.mjs'
+
+// ── En feilet probe må si HVORFOR ─────────────────────────────────────────
+//
+// ⚠️ Vakten her er ikke at probe returnerer null. Det gjorde den før også.
+// Vakten er at det skrives en linje som forteller hvilken feil det var, for
+// det var nettopp fraværet av den linja som gjorde 26 timers falsk nedetid
+// 28.08.2026 umulig å diagnostisere uten å endre koden først.
+{
+  const linjer = []
+  const logg = (l) => linjer.push(l)
+
+  const ok = await probe(async () => ({ ok: true, status: 200 }), logg)
+  assert.equal(typeof ok, 'number', 'et 200-svar gir svartid')
+  assert.equal(linjer.length, 0, 'et vellykket svar logger ingenting')
+
+  const feil = await probe(
+    async () => ({ ok: false, status: 401, text: async () => '{"message":"Invalid API key"}' }),
+    logg
+  )
+  assert.equal(feil, null, 'et ikke-ok svar teller som feilet')
+  assert.equal(linjer.length, 1, 'et ikke-ok svar logger nøyaktig én linje')
+  assert.match(linjer[0], /401/, 'statuskoden står i loggen')
+  assert.match(linjer[0], /Invalid API key/, 'kroppen står i loggen')
+
+  linjer.length = 0
+  const kastet = await probe(async () => {
+    throw Object.assign(new Error('fetch failed'), { name: 'TypeError' })
+  }, logg)
+  assert.equal(kastet, null)
+  assert.equal(linjer.length, 1)
+  assert.match(linjer[0], /TypeError: fetch failed/, 'kastet feil navngis i loggen')
+
+  // En kropp som ikke lar seg lese skal ikke ta ned målingen, bare bli notert.
+  linjer.length = 0
+  await probe(
+    async () => ({ ok: false, status: 403, text: async () => { throw new Error('nope') } }),
+    logg
+  )
+  assert.equal(linjer.length, 1)
+  assert.match(linjer[0], /403/)
+
+  // Lange kropper avkortes, ellers drukner loggen i en HTML-feilside.
+  linjer.length = 0
+  await probe(async () => ({ ok: false, status: 503, text: async () => 'x'.repeat(5000) }), logg)
+  assert.ok(linjer[0].length < 300, `loggelinja er ${linjer[0].length} tegn, for lang`)
+}
 
 // ── Tilstand ut fra prober ────────────────────────────────────────────────
 assert.equal(maalTilstand([120, 90, 110]).tilstand, 'oppe')

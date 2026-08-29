@@ -1,0 +1,68 @@
+name: Diagnostiser proben
+
+# ⚠️ KUN workflow_dispatch, av samme grunn som «Mål Supabase»: repoet er
+# offentlig, og fork-baserte pull requests er angrepsveien mot hemmeligheter i
+# offentlige repoer. workflow_dispatch krever skrivetilgang.
+#
+# Denne jobben SKRIVER ALDRI status.json. Den finnes for å svare på ett
+# spørsmål: hva ser en GitHub-runner når den prøver samme vei som appen?
+# Derfor `contents: read`, ingen commit, ingen push.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Hvor står runneren
+        run: |
+          echo "utgående IP: $(curl -s --max-time 10 https://api.ipify.org || echo ukjent)"
+
+      - name: Prob REST, og skriv ALT den svarer
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          node -e '
+            const SB = process.env.SUPABASE_URL
+            const ANON = process.env.SUPABASE_ANON_KEY
+            if (!SB || !ANON) { console.error("Mangler secret."); process.exit(1) }
+
+            // Formen på verdiene, ikke verdiene. Avslører trailing newline,
+            // feil skjema og en nøkkel som er byttet til et nytt format.
+            console.log(`URL: ${SB.length} tegn, slutter på "/" ${SB.endsWith("/")}, whitespace ${/\s/.test(SB)}`)
+            console.log(`ANON: ${ANON.length} tegn, whitespace ${/\s/.test(ANON)}, prefiks ${ANON.slice(0, 3)}`)
+            try {
+              const p = JSON.parse(Buffer.from(ANON.split(".")[1], "base64url").toString())
+              console.log(`ANON er JWT: rolle ${p.role}, utløper ${new Date(p.exp * 1000).toISOString()}`)
+            } catch { console.log("ANON er ikke en lesbar JWT") }
+
+            const { hostname } = new URL(SB)
+            console.log(`vert: ${hostname}`)
+
+            for (const [navn, url, headers] of [
+              ["REST med nøkkel", `${SB}/rest/v1/profiles?select=id&limit=1`, { apikey: ANON, Authorization: `Bearer ${ANON}` }],
+              ["REST uten nøkkel", `${SB}/rest/v1/`, {}],
+              ["auth/health", `${SB}/auth/v1/health`, { apikey: ANON }],
+            ]) {
+              const start = Date.now()
+              try {
+                const r = await fetch(url, { headers, signal: AbortSignal.timeout(10000) })
+                const kropp = (await r.text()).slice(0, 300).replace(/\s+/g, " ").trim()
+                console.log(`\n${navn}: HTTP ${r.status} etter ${Date.now() - start} ms`)
+                console.log(`  server=${r.headers.get("server")} cf-ray=${r.headers.get("cf-ray")} cf-mitigated=${r.headers.get("cf-mitigated")}`)
+                console.log(`  kropp: ${kropp}`)
+              } catch (e) {
+                console.log(`\n${navn}: KASTET etter ${Date.now() - start} ms: ${e.name}: ${e.message} ${e.cause?.code ?? ""}`)
+              }
+            }
+          '
